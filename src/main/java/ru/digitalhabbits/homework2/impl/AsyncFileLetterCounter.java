@@ -8,14 +8,14 @@ import ru.digitalhabbits.homework2.LetterCounter;
 import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.stream.Stream;
 
-//todo Make your impl
 public class AsyncFileLetterCounter implements FileLetterCounter {
 
-    private final ExecutorService executor;
+    private final Executor executor;
     private final FileReader fileReader;
     private final LetterCounter letterCounter;
     private final LetterCountMerger letterCountMerger;
@@ -27,26 +27,23 @@ public class AsyncFileLetterCounter implements FileLetterCounter {
         this.letterCountMerger = new LetterCountMergerImpl();
     }
 
-    public AsyncFileLetterCounter(ExecutorService executor, FileReader fileReader, LetterCounter letterCounter, LetterCountMerger letterCountMerger) {
+    public AsyncFileLetterCounter(Executor executor, FileReader fileReader, LetterCounter letterCounter, LetterCountMerger letterCountMerger) {
         this.executor = executor;
         this.fileReader = fileReader;
         this.letterCounter = letterCounter;
         this.letterCountMerger = letterCountMerger;
     }
 
-    //TODO calculating characters count and merging results should be run asynchronously
     @Override
     public Map<Character, Long> count(File input) {
-        return fileReader.readLines(input)
-                .map(str -> executor.submit(() -> letterCounter.count(str)))
-                .map(feature -> {
-                    try {
-                        return feature.get();
-                    } catch (ExecutionException | InterruptedException e) {
-                        throw new RuntimeException(e);
-                    }
-                })
-                .reduce(letterCountMerger::merge)
-                .orElse(new HashMap<>());
+        try (Stream<String> lines = fileReader.readLines(input)) {
+            return lines.map(str -> CompletableFuture.supplyAsync(() -> letterCounter.count(str), executor))
+                    .reduce(
+                            CompletableFuture.completedFuture(new HashMap<>()),
+                            (val1, val2) -> val1.thenCombineAsync(val2, letterCountMerger::merge, executor)
+                    )
+                    .join();
+        }
     }
+
 }
